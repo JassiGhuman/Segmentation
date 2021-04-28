@@ -1,9 +1,15 @@
 import os
 import unittest
 import logging
+import hashlib
 import vtk, qt, ctk, slicer
 from slicer.ScriptedLoadableModule import *
 from slicer.util import VTKObservationMixin
+import SampleData
+import numpy as np
+from slicer.util import arrayFromVolume,updateTableFromArray,getNode,loadNodeFromFile, loadNodesFromFile
+import vtkSegmentationCorePython as vtkSegmentationCore
+import ScreenCapture
 
 #
 # CustomSegmentation
@@ -136,10 +142,17 @@ class CustomSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
     self.ui.imageThresholdSliderWidget.connect("valueChanged(double)", self.updateParameterNodeFromGUI)
     self.ui.invertOutputCheckBox.connect("toggled(bool)", self.updateParameterNodeFromGUI)
     self.ui.invertedOutputSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
-
+    
+    #------------------------------------------------Mapping of User Interface to Functions----------------------------------------------- 
     # Buttons
     self.ui.applyButton.connect('clicked(bool)', self.onApplyButton)
-    self.ui.applyButton.connect('clicked(bool)', self.onFetchButton)
+    self.ui.fetchButton.connect('clicked(bool)', self.onFetchButton)
+    self.ui.histogramButton.connect('clicked(bool)', self.onHistogramButton)
+    self.ui.fetch2Button.connect('clicked(bool)', self.onFetch2Button)
+    self.ui.histogram2Button.connect('clicked(bool)', self.onHistogram2Button)
+    self.ui.saveMrbButton.connect('clicked(bool)', self.onSaveScene('saved_mrb_scene.mrb'));
+    self.ui.saveMrmlButton.connect('clicked(bool)', self.onSaveScene('saved_mrml_scene.mrml'));
+    self.ui.savePngButton.connect('clicked(bool)',self.onSavePngButton);
     
     # Make sure parameter node is initialized (needed for module reload)
     self.initializeParameterNode()
@@ -265,13 +278,313 @@ class CustomSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin
     self._parameterNode.EndModify(wasModified)
   
   def onFetchButton(self):
-    """ Code here"""
-    slicer.util.errorDisplay("Failed to compute results: "+vtk.VTK_VERSION)
+    """
+    This method is called when the user Clicks on "Fetch data from GITHUB" button in the GUI.
+    The method loads data from GITHUB release and displays it in viewports in 3D SLicer.
+    """
+    print('Fetch Button Pressed...............')
+    
+    #Clear the scene
+    slicer.mrmlScene.Clear()
+    
+    #Generating Hash Values
+    #filename= r"C:\Users\jaski\Downloads\3dSlicer\Segmentation.nrrd"
+    #print(hashlib.sha256(open(filename, "rb").read()).hexdigest())
+    
+    iconsPath = os.path.join(os.path.dirname(__file__), 'Resources/Icons')
+
+    # CustomSegmentation3
+    SampleData.SampleDataLogic.registerCustomSampleDataSource(
+    
+    # Category and sample name displayed in Sample Data module
+    category='CustomSegmentation',
+    sampleName='CustomSegmentation3',
+    thumbnailFileName=os.path.join(iconsPath, 'CustomSegmentation3.png'),
+    
+    uris="https://github.com/JassiGhuman/Segmentation/releases/download/SHA256/14b49c992e11d07d4e70873be53b45521be3ec0e857f83bec74a9c9598a77d8a",
+    fileNames='CustomSegmentation3.nrrd',
+    
+    #Checksum to ensure file integrity. Can be computed by this command:
+    checksums = 'SHA256:14b49c992e11d07d4e70873be53b45521be3ec0e857f83bec74a9c9598a77d8a',
+    
+    # This node name will be used when the data set is loaded
+    nodeNames='CustomSegmentation3'
+    )
+    
+    print('Start Loading data set')
+    inputVolume = SampleData.downloadSample('CustomSegmentation3')
+    print('Loaded data set')
+
+    inputScalarRange = inputVolume.GetImageData().GetScalarRange()
+
+    outputVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
+    print('Fetch Completed')
+    
+    
+  def onSaveScene(self,filename, properties={}):
+    """
+    This method is called when the user Clicks on "Save as .mrb" or "Save as .mrml" buttons in the GUI.
+    This method saves the scene depending on the filename parameter.  
+    """
+    from slicer import app
+    filetype = 'SceneFile'
+    properties['fileName'] = filename
+    return app.coreIOManager().saveNodes(filetype, properties)
   
+  
+  def onSavePngButton(self):
+    """
+    This method is called when the user Clicks on "Save as selected" button in the GUI.
+    This method saves the scene depending on the option selected in the dropdown.
+    """
+    print("Inside onSavePngButton method");
+    selectedOption = self.ui.pngComboBox.currentText
+    print(selectedOption);
+    if selectedOption == 'Capture 3D view as PNG with transparent background':
+      renderWindow = slicer.app.layoutManager().threeDWidget(0).threeDView().renderWindow()
+      renderWindow.SetAlphaBitPlanes(1)
+      wti = vtk.vtkWindowToImageFilter()
+      wti.SetInputBufferTypeToRGBA()
+      wti.SetInput(renderWindow)
+      writer = vtk.vtkPNGWriter()
+      writer.SetFileName("saved3dview.png")
+      writer.SetInputConnection(wti.GetOutputPort())
+      writer.Write()
+      print("3dsceneShot saved");
+    elif selectedOption == "Capture all views as PNG":
+      cap = ScreenCapture.ScreenCaptureLogic()
+      cap.showViewControllers(False)
+      cap.captureImageFromView(None, "allViewsShot.png")
+      cap.showViewControllers(True)
+      print("allViewsShot saved");
+    elif selectedOption == "Capture full slicer Window":
+      img = qt.QPixmap.grabWidget(slicer.util.mainWindow()).toImage()
+      img.save("mainWindowShot.png")
+      print("mainWindow saved");
+    else:
+      print("Select a valid Option");
+  
+  
+  def onHistogramButton(self):
+    """
+    This method is called when the user clicks on 1st "Create Histogram" button in the GUI.
+    This method generates histogram associated to "fetch data from GITHUB" button.  
+    """
+    iconsPath = os.path.join(os.path.dirname(__file__), 'Resources/Icons')
+    
+    # Get a volume from SampleData and compute its histogram
+    SampleData.SampleDataLogic.registerCustomSampleDataSource(
+    
+    # Category and sample name displayed in Sample Data module
+    category='CustomSegmentation',
+    sampleName='CustomSegmentation3',
+    thumbnailFileName=os.path.join(iconsPath, 'CustomSegmentation3.png'),
+    uris="https://github.com/JassiGhuman/Segmentation/releases/download/SHA256/14b49c992e11d07d4e70873be53b45521be3ec0e857f83bec74a9c9598a77d8a",
+    fileNames='CustomSegmentation3.nrrd',
+    checksums = 'SHA256:14b49c992e11d07d4e70873be53b45521be3ec0e857f83bec74a9c9598a77d8a',
+    # This node name will be used when the data set is loaded
+    nodeNames='CustomSegmentation3'
+    )
+    inputVolume = SampleData.downloadSample('CustomSegmentation3')
+
+    #volumeNode = SampleData.SampleDataLogic().downloadMRHead()
+    histogram = np.histogram(arrayFromVolume(inputVolume), bins=50)
+
+    chartNode = slicer.util.plot(histogram, xColumnIndex = 1)
+    chartNode.SetYAxisRangeAuto(False)
+    chartNode.SetYAxisRange(0, 4e5)
+    
+  def onHistogram2Button(self):
+    """
+    This method is called when the user clicks on 2nd "Create Histogram" button in the GUI.
+    This method generates histogram associated to "fetch Brain Tumor Segmentation" button.  
+    """
+  
+    #Clear the scene
+    slicer.mrmlScene.Clear()
+    
+    # Load master volume
+    sampleDataLogic = SampleData.SampleDataLogic()
+    masterVolumeNode = sampleDataLogic.downloadMRBrainTumor1()
+
+    # Create segmentation
+    segmentationNode = slicer.vtkMRMLSegmentationNode()
+    slicer.mrmlScene.AddNode(segmentationNode)
+    segmentationNode.CreateDefaultDisplayNodes() # only needed for display
+    segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(masterVolumeNode)
+
+    # Create seed segment inside tumor
+    tumorSeed = vtk.vtkSphereSource()
+    tumorSeed.SetCenter(-6, 30, 28)
+    tumorSeed.SetRadius(10)
+    tumorSeed.Update()
+    segmentationNode.AddSegmentFromClosedSurfaceRepresentation(tumorSeed.GetOutput(), "Tumor", [1.0,0.0,0.0])
+
+    # Create seed segment inside tumor 2
+    referenceSeed = vtk.vtkSphereSource()
+    referenceSeed.SetCenter(-6, -50, -10)
+    referenceSeed.SetRadius(20)
+    referenceSeed.Update()
+    segmentationNode.AddSegmentFromClosedSurfaceRepresentation(referenceSeed.GetOutput(), "Reference", [0.0,0.0,1.0])
+
+    # Create seed segment outside tumor
+    backgroundSeedPositions = [[0,65,32], [1, -14, 30], [0, 28, -7], [0,30,64], [31, 33, 27], [-42, 30, 27]]
+    append = vtk.vtkAppendPolyData()
+    for backgroundSeedPosition in backgroundSeedPositions:
+      backgroundSeed = vtk.vtkSphereSource()
+      backgroundSeed.SetCenter(backgroundSeedPosition)
+      backgroundSeed.SetRadius(10)
+      backgroundSeed.Update()
+      append.AddInputData(backgroundSeed.GetOutput())
+
+    append.Update()
+    backgroundSegmentId = segmentationNode.AddSegmentFromClosedSurfaceRepresentation(append.GetOutput(), "Background", [0.0,1.0,0.0])
+
+    # Perform analysis
+    ################################################
+
+    # Create segment editor to get access to effects
+    segmentEditorWidget = slicer.qMRMLSegmentEditorWidget()
+    # To show segment editor widget (useful for debugging): segmentEditorWidget.show()
+    segmentEditorWidget.setMRMLScene(slicer.mrmlScene)
+    segmentEditorNode = slicer.vtkMRMLSegmentEditorNode()
+    slicer.mrmlScene.AddNode(segmentEditorNode)
+    segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
+    segmentEditorWidget.setSegmentationNode(segmentationNode)
+    segmentEditorWidget.setMasterVolumeNode(masterVolumeNode)
+
+    # Set up masking parameters
+    segmentEditorWidget.setActiveEffectByName("Mask volume")
+    effect = segmentEditorWidget.activeEffect()
+    # set fill value to be outside the valid intensity range
+    intensityRange = masterVolumeNode.GetImageData().GetScalarRange()
+    effect.setParameter("FillValue", str(intensityRange[0]-1))
+    # Blank out voxels that are outside the segment
+    effect.setParameter("Operation", "FILL_OUTSIDE")
+    # Create a volume that will store temporary masked volumes
+    maskedVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", "Temporary masked volume")
+    effect.self().outputVolumeSelector.setCurrentNode(maskedVolume)
+
+    # Create chart
+    plotChartNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLPlotChartNode", "Histogram")
+    
+    
+    # Create histogram plot data series for each masked volume
+    for segmentIndex in range(segmentationNode.GetSegmentation().GetNumberOfSegments()):
+      # Set active segment
+      segmentID = segmentationNode.GetSegmentation().GetNthSegmentID(segmentIndex)
+      segmentEditorWidget.setCurrentSegmentID(segmentID)
+      # Apply mask
+      effect.self().onApply()
+      # Compute histogram values
+      histogram = np.histogram(arrayFromVolume(maskedVolume), bins=100, range=intensityRange)
+      # Save results to a new table node
+      segment = segmentationNode.GetSegmentation().GetNthSegment(segmentIndex)
+      tableNode=slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTableNode", segment.GetName() + " histogram table")
+      updateTableFromArray(tableNode, histogram)
+      tableNode.GetTable().GetColumn(0).SetName("Count")
+      tableNode.GetTable().GetColumn(1).SetName("Intensity")
+      # Create new plot data series node
+      plotSeriesNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLPlotSeriesNode", segment.GetName() + " histogram")
+      plotSeriesNode.SetAndObserveTableNodeID(tableNode.GetID())
+      plotSeriesNode.SetXColumnName("Intensity")
+      plotSeriesNode.SetYColumnName("Count")
+      plotSeriesNode.SetPlotType(slicer.vtkMRMLPlotSeriesNode.PlotTypeScatter)
+      plotSeriesNode.SetMarkerStyle(slicer.vtkMRMLPlotSeriesNode.MarkerStyleNone)
+      plotSeriesNode.SetUniqueColor()
+      # Add plot to chart
+      plotChartNode.AddAndObservePlotSeriesNodeID(plotSeriesNode.GetID())
+
+    # Show chart in layout
+    slicer.modules.plots.logic().ShowChartInLayout(plotChartNode)
+
+    # Delete temporary node
+    slicer.mrmlScene.RemoveNode(maskedVolume)
+    slicer.mrmlScene.RemoveNode(segmentEditorNode)
+    
+    print('Histogram generated for Brain Tumor Segmentation')
+  
+  
+  def onFetch2Button(self):
+    """
+    This method is called when the user clicks on "Fetch Brain tumor Segmentation" button in the GUI.
+    This method displays segmented tumor in 3D object viewport.  
+    """
+    print('Fetching Brain tumor Segmentation Data ...............')
+    
+    #Clear the scene
+    slicer.mrmlScene.Clear()
+    
+    # Load master volume
+    sampleDataLogic = SampleData.SampleDataLogic()
+    masterVolumeNode = sampleDataLogic.downloadMRBrainTumor1()
+
+    # Create segmentation
+    segmentationNode = slicer.vtkMRMLSegmentationNode()
+    slicer.mrmlScene.AddNode(segmentationNode)
+    segmentationNode.CreateDefaultDisplayNodes() # only needed for display
+    segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(masterVolumeNode)
+
+    # Create seed segment inside tumor
+    tumorSeed = vtk.vtkSphereSource()
+    tumorSeed.SetCenter(-6, 30, 28)
+    tumorSeed.SetRadius(10)
+    tumorSeed.Update()
+    segmentationNode.AddSegmentFromClosedSurfaceRepresentation(tumorSeed.GetOutput(), "Tumor", [1.0,0.0,0.0])
+
+    # Create seed segment inside tumor 2
+    referenceSeed = vtk.vtkSphereSource()
+    referenceSeed.SetCenter(-6, -50, -10)
+    referenceSeed.SetRadius(20)
+    referenceSeed.Update()
+    segmentationNode.AddSegmentFromClosedSurfaceRepresentation(referenceSeed.GetOutput(), "Reference", [0.0,0.0,1.0])
+
+    # Create seed segment outside tumor
+    backgroundSeedPositions = [[0,65,32], [1, -14, 30], [0, 28, -7], [0,30,64], [31, 33, 27], [-42, 30, 27]]
+    append = vtk.vtkAppendPolyData()
+    for backgroundSeedPosition in backgroundSeedPositions:
+      backgroundSeed = vtk.vtkSphereSource()
+      backgroundSeed.SetCenter(backgroundSeedPosition)
+      backgroundSeed.SetRadius(10)
+      backgroundSeed.Update()
+      append.AddInputData(backgroundSeed.GetOutput())
+
+    append.Update()
+    backgroundSegmentId = segmentationNode.AddSegmentFromClosedSurfaceRepresentation(append.GetOutput(), "Background", [0.0,1.0,0.0])
+
+    # Perform analysis
+    ################################################
+
+    # Create segment editor to get access to effects
+    segmentEditorWidget = slicer.qMRMLSegmentEditorWidget()
+    # To show segment editor widget (useful for debugging): segmentEditorWidget.show()
+    segmentEditorWidget.setMRMLScene(slicer.mrmlScene)
+    segmentEditorNode = slicer.vtkMRMLSegmentEditorNode()
+    slicer.mrmlScene.AddNode(segmentEditorNode)
+    segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
+    segmentEditorWidget.setSegmentationNode(segmentationNode)
+    segmentEditorWidget.setMasterVolumeNode(masterVolumeNode)
+
+    # Set up masking parameters
+    segmentEditorWidget.setActiveEffectByName("Mask volume")
+    effect = segmentEditorWidget.activeEffect()
+    # set fill value to be outside the valid intensity range
+    intensityRange = masterVolumeNode.GetImageData().GetScalarRange()
+    effect.setParameter("FillValue", str(intensityRange[0]-1))
+    # Blank out voxels that are outside the segment
+    effect.setParameter("Operation", "FILL_OUTSIDE")
+    # Create a volume that will store temporary masked volumes
+    maskedVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", "Temporary masked volume")
+    effect.self().outputVolumeSelector.setCurrentNode(maskedVolume)
+    
+    print('Brain tumor Segmentation Data Fetched Successfully...........')
+   
+    
   def onApplyButton(self):
     """
     Run processing when user clicks "Apply" button.
     """
+    print('Apply Button Pressed...............')
     try:
 
       # Compute output
